@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: ${AZURE_SQL_URL}
+    username: ${AZURE_SQL_USERNAME}
+    password: ${AZURE_SQL_PASSWORD}
+  jpa:
+    open-in-view: false
+    # Flyway owns the schema (src/main/resources/db/migration).
+    hibernate:
+      ddl-auto: none
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+# Swagger stays public on purpose: the PJBL delivery requires it in the cloud.
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    persist-authorization: true
+
+# The Azure SDK logs every AMQP connection step at INFO.
+logging:
+  level:
+    com.azure: WARN
+
+# payflow.internal-key comes from PAYFLOW_INTERNAL_KEY (required, 32+ characters).
+payflow:
+  messaging:
+    # Empty = events wait in outbox_event and are published once it is set.
+    connection-string: ${SERVICEBUS_CONNECTION_STRING:}
+    queue: ${SERVICEBUS_QUEUE:payment-events}
+    relay-interval: 2s
+    batch-size: 50
+  gateway:
+    timeout: 2s
+    simulated-delay: 5s
+    circuit-open-duration: 30s
+  idempotency:
+    ttl: 24h

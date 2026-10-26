@@ -1,0 +1,241 @@
+asyncapi: 3.0.0
+info:
+  title: PayFlow payment events
+  version: 1.0.0
+  description: |
+    Eventos publicados pelo payment-service a cada mudança de status de um pagamento.
+    Cada evento é gravado na tabela outbox_event na mesma transação do pagamento (transactional outbox)
+    e publicado pelo OutboxRelay a cada 2 s. A entrega é pelo menos uma vez: consumidores devem ignorar
+    eventos repetidos pelo `id` (igual ao messageId da mensagem).
+    Consumidor atual: Azure Function `deliver-webhook` (payflow-functions).
+
+servers:
+  azure:
+    host: sb-payflow.servicebus.windows.net
+    protocol: amqp
+    protocolVersion: '1.0'
+    description: Azure Service Bus (Basic). Em desenvolvimento, o emulador oficial em localhost:5672.
+
+channels:
+  paymentEvents:
+    address: payment-events
+    description: |
+      Fila do Service Bus. MaxDeliveryCount = 5 e lock de 60 s: depois de 5 entregas sem sucesso
+      a mensagem vai para a dead-letter queue (payment-events/$DeadLetterQueue).
+    messages:
+      paymentAuthorized:
+        $ref: '#/components/messages/paymentAuthorized'
+      paymentDeclined:
+        $ref: '#/components/messages/paymentDeclined'
+      paymentPending:
+        $ref: '#/components/messages/paymentPending'
+      paymentConfirmed:
+        $ref: '#/components/messages/paymentConfirmed'
+      paymentRefunded:
+        $ref: '#/components/messages/paymentRefunded'
+      paymentCanceled:
+        $ref: '#/components/messages/paymentCanceled'
+
+operations:
+  publishPaymentEvent:
+    action: send
+    channel:
+      $ref: '#/channels/paymentEvents'
+    summary: O payment-service publica um evento por mudança de status.
+    messages:
+      - $ref: '#/channels/paymentEvents/messages/paymentAuthorized'
+      - $ref: '#/channels/paymentEvents/messages/paymentDeclined'
+      - $ref: '#/channels/paymentEvents/messages/paymentPending'
+      - $ref: '#/channels/paymentEvents/messages/paymentConfirmed'
+      - $ref: '#/channels/paymentEvents/messages/paymentRefunded'
+      - $ref: '#/channels/paymentEvents/messages/paymentCanceled'
+
+components:
+  messages:
+    paymentAuthorized:
+      name: payment.authorized
+      summary: Cartão aprovado pelo gateway (status AUTHORIZED).
+      contentType: application/cloudevents+json
+      headers:
+        $ref: '#/components/schemas/ServiceBusProperties'
+      payload:
+        $ref: '#/components/schemas/PaymentCloudEvent'
+      examples:
+        - name: authorized
+          payload:
+            specversion: '1.0'
+            id: 6b1f2c3d-0a1b-4c2d-9e3f-1a2b3c4d5e6f
+            source: /payflow/payment-service
+            type: payment.authorized
+            subject: 9f8e7d6c-5b4a-4321-8765-0fedcba98765
+            time: '2026-10-26T19:59:30.123456Z'
+            datacontenttype: application/json
+            merchantid: 00000000-0000-0000-0000-000000000001
+            data:
+              paymentId: 9f8e7d6c-5b4a-4321-8765-0fedcba98765
+              merchantId: 00000000-0000-0000-0000-000000000001
+              method: CARD
+              status: AUTHORIZED
+              amount: 10000
+              currency: BRL
+              refundedAmount: 0
+    paymentDeclined:
+      name: payment.declined
+      summary: Cartão recusado pelo gateway (status DECLINED).
+      contentType: application/cloudevents+json
+      headers:
+        $ref: '#/components/schemas/ServiceBusProperties'
+      payload:
+        $ref: '#/components/schemas/PaymentCloudEvent'
+    paymentPending:
+      name: payment.pending
+      summary: Cobrança PIX criada, aguardando o pagamento do QR Code (status PENDING).
+      contentType: application/cloudevents+json
+      headers:
+        $ref: '#/components/schemas/ServiceBusProperties'
+      payload:
+        $ref: '#/components/schemas/PaymentCloudEvent'
+    paymentConfirmed:
+      name: payment.confirmed
+      summary: PIX confirmado pelo gateway (status CONFIRMED).
+      contentType: application/cloudevents+json
+      headers:
+        $ref: '#/components/schemas/ServiceBusProperties'
+      payload:
+        $ref: '#/components/schemas/PaymentCloudEvent'
+    paymentRefunded:
+      name: payment.refunded
+      summary: Estorno registrado (status PARTIALLY_REFUNDED ou REFUNDED); data.refund traz o estorno.
+      contentType: application/cloudevents+json
+      headers:
+        $ref: '#/components/schemas/ServiceBusProperties'
+      payload:
+        $ref: '#/components/schemas/PaymentCloudEvent'
+      examples:
+        - name: partialRefund
+          payload:
+            specversion: '1.0'
+            id: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+            source: /payflow/payment-service
+            type: payment.refunded
+            subject: 9f8e7d6c-5b4a-4321-8765-0fedcba98765
+            time: '2026-10-26T20:05:00Z'
+            datacontenttype: application/json
+            merchantid: 00000000-0000-0000-0000-000000000001
+            data:
+              paymentId: 9f8e7d6c-5b4a-4321-8765-0fedcba98765
+              merchantId: 00000000-0000-0000-0000-000000000001
+              method: CARD
+              status: PARTIALLY_REFUNDED
+              amount: 10000
+              currency: BRL
+              refundedAmount: 2500
+              refund:
+                id: 2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d
+                amount: 2500
+                reason: avaria
+    paymentCanceled:
+      name: payment.canceled
+      summary: PIX pendente cancelado pelo lojista (status CANCELED).
+      contentType: application/cloudevents+json
+      headers:
+        $ref: '#/components/schemas/ServiceBusProperties'
+      payload:
+        $ref: '#/components/schemas/PaymentCloudEvent'
+
+  schemas:
+    ServiceBusProperties:
+      type: object
+      description: Propriedades da mensagem no Service Bus.
+      properties:
+        messageId:
+          type: string
+          format: uuid
+          description: Igual ao id do CloudEvent; use para descartar repetições.
+        subject:
+          type: string
+          description: Igual ao type do CloudEvent.
+        contentType:
+          type: string
+          const: application/cloudevents+json; charset=utf-8
+        paymentId:
+          type: string
+          format: uuid
+          description: Propriedade de aplicação.
+        cloudEvents_type:
+          type: string
+          description: Propriedade de aplicação, igual ao type.
+
+    PaymentCloudEvent:
+      type: object
+      description: CloudEvents 1.0 em modo estruturado.
+      required: [specversion, id, source, type, subject, time, datacontenttype, merchantid, data]
+      properties:
+        specversion:
+          type: string
+          const: '1.0'
+        id:
+          type: string
+          format: uuid
+        source:
+          type: string
+          const: /payflow/payment-service
+        type:
+          type: string
+          enum: [payment.authorized, payment.declined, payment.pending, payment.confirmed, payment.refunded, payment.canceled]
+        subject:
+          type: string
+          format: uuid
+          description: Id do pagamento.
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          const: application/json
+        merchantid:
+          type: string
+          format: uuid
+          description: Extensão CloudEvents com o lojista dono do pagamento (para buscar o webhook dele).
+        data:
+          $ref: '#/components/schemas/PaymentEventData'
+
+    PaymentEventData:
+      type: object
+      description: Retrato do pagamento logo após a mudança de status. Valores em centavos.
+      required: [paymentId, merchantId, method, status, amount, currency, refundedAmount]
+      properties:
+        paymentId:
+          type: string
+          format: uuid
+        merchantId:
+          type: string
+          format: uuid
+        method:
+          type: string
+          enum: [CARD, PIX]
+        status:
+          type: string
+          enum: [PENDING, AUTHORIZED, DECLINED, CONFIRMED, CANCELED, PARTIALLY_REFUNDED, REFUNDED]
+        amount:
+          type: integer
+          minimum: 1
+        currency:
+          type: string
+          const: BRL
+        refundedAmount:
+          type: integer
+          minimum: 0
+        refund:
+          type: object
+          description: Só em payment.refunded.
+          required: [id, amount]
+          properties:
+            id:
+              type: string
+              format: uuid
+            amount:
+              type: integer
+              minimum: 1
+            reason:
+              type: [string, 'null']
